@@ -283,3 +283,11 @@ trainer.fit(model=rede2, train_dataloaders=dataset2['train'], val_dataloaders=da
 
 display(checkpoint_callback.best_model_path)
 display(checkpoint_callback.best_model_score)
+
+best_model = TreinadorCustom.load_from_checkpoint(checkpoint_callback.best_model_path)
+
+tipos = ['test', 'facil', 'dificil']
+for t in tipos:
+    all_predictions, all_true_labels = get_predictions_and_labels(best_model, dataset2[t])
+    r = compute_metrics(all_true_labels, all_predictions)
+    print(f"No {t}: ACC: {r['ACC']}, RMSE: {r['RMSE']}, QWK: {r['QWK']}, HDIV: {r['HDIV']} ") 
