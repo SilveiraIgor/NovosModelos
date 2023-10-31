@@ -194,7 +194,7 @@ class TreinadorCustom(pl.LightningModule):
         )
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
     
-    def get_predictions_and_labels(model, dataloader):
+def get_predictions_and_labels(model, dataloader):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
 
