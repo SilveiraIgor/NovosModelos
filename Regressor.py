@@ -51,6 +51,7 @@ def compute_metrics(preds, labels):
     acc = accuracy_score(labels, preds)
     return {"RMSE": RMSE, 'QWK': QWK,'MAE': mae, 'ACC': acc*100, 'MSE': MSE, 'HDIV': dv}
 
+
 modelo = "neuralmind/bert-large-portuguese-cased"
 tokenizer = AutoTokenizer.from_pretrained(modelo,model_max_length=512, truncation=True, do_lower_case=False)
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -194,23 +195,23 @@ class TreinadorCustom(pl.LightningModule):
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
     
     def get_predictions_and_labels(model, dataloader):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
 
-    all_predictions = []
-    all_true_labels = []
-    i=0
-    model.eval()
-    for batch in tqdm(dataloader, desc="Obtaining predictions"):
-        labels = batch["labels"].to(device)
-        with torch.no_grad():
-            output = model(input_ids=batch['input_ids'].to(device), attention_mask=batch['attention_mask'].to(device)  , token_type_ids=batch['token_type_ids'].to(device))
-            #predicted_classes = predict_classes(output) 
-        # If using GPU, need to move the data back to CPU to use numpy.
-        all_predictions.extend(output['logits'].cpu().numpy())
-        all_true_labels.extend(labels.cpu().numpy())
+        all_predictions = []
+        all_true_labels = []
+        i=0
+        model.eval()
+        for batch in tqdm(dataloader, desc="Obtaining predictions"):
+            labels = batch["labels"].to(device)
+            with torch.no_grad():
+                output = model(input_ids=batch['input_ids'].to(device), attention_mask=batch['attention_mask'].to(device)  , token_type_ids=batch['token_type_ids'].to(device))
+                #predicted_classes = predict_classes(output) 
+            # If using GPU, need to move the data back to CPU to use numpy.
+            all_predictions.extend(output['logits'].cpu().numpy())
+            all_true_labels.extend(labels.cpu().numpy())
 
-    return all_predictions, all_true_labels
+        return all_predictions, all_true_labels
 
 from IPython.display import display
 from lightning.pytorch.callbacks import Callback
