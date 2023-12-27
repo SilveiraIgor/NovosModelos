@@ -13,17 +13,12 @@ from lightning.pytorch.trainer import Trainer
 from sklearn.metrics import cohen_kappa_score, mean_squared_error, accuracy_score
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
-from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, Callback
 from lightning.pytorch.loggers.csv_logs import CSVLogger
 from IPython.display import display
 from transformers import get_cosine_schedule_with_warmup
 from torch.optim import AdamW
-
-data_path = "./"
-loaded_data = load_from_disk(data_path)
-batch_size = 1
-epochs = 100
-COMPETENCIA = 1
+from datasets import load_dataset, disable_caching
 
 def discrepancia_horizontal(gold, pred):
     ocorrencias = 0
@@ -37,34 +32,21 @@ def discrepancia_horizontal(gold, pred):
 def compute_metrics(preds, labels):
     labels = np.array(labels) *40
     preds = np.array(preds)   *40
-    print("Printar o labels e preds no Compute_metrics: ", len(labels), len(preds))
-    print("Predictions: ", preds[:3])
-    print("Labels: ", labels[:3])
-    mae = mean_absolute_error(labels, preds)
-    RMSE = mean_squared_error(preds, labels, squared=False)
-    MSE = mean_squared_error(preds, labels, squared=True)
     labels = discretizar(labels)
     preds = discretizar(preds)
+    RMSE = mean_squared_error(preds, labels, squared=False)
     dv = discrepancia_horizontal(labels, preds)
     QWK = cohen_kappa_score(preds, labels, labels=[0,40,80,120,160,200])
     acc = accuracy_score(labels, preds)
-    return {"RMSE": RMSE, 'QWK': QWK,'MAE': mae, 'ACC': acc*100, 'MSE': MSE, 'HDIV': dv}
-
-modelo = "neuralmind/bert-large-portuguese-cased"
-tokenizer = AutoTokenizer.from_pretrained(modelo,model_max_length=512, truncation=True, do_lower_case=False)
-device = "cuda" if torch.cuda.is_available() else "cpu"
-#device = "cpu"
-
-torch.cuda.is_available()
-from datasets import disable_caching
-disable_caching()
+    #colocando o inverso da acurácia como loss, já que não estamos recebendo as probabilidaeds para calcular entropia
+    return {"RMSE": RMSE, 'QWK': QWK, 'ACC': acc*100, 'HDIV': dv, 'MSE': 1/acc}
 
 def preparar_dataset(exemplo):
-    resposta = tokenizer(exemplo['essay_text'], max_length=512, truncation=True, padding='max_length', return_tensors='pt')
+    resposta = tokenizer(exemplo['essay'], max_length=512, truncation=True, padding='max_length', return_tensors='pt')
     return {'input_ids': resposta['input_ids'], 'token_type_ids': resposta['token_type_ids'], 'attention_mask':resposta['attention_mask']} 
     
 def preparar2_dataset(exemplo):
-    numero = exemplo['linked_items']['grades'][COMPETENCIA-1]
+    numero = eval(exemplo['grades'])[COMPETENCIA-1]
     return {'placeholder': numero//40}
 
 def preparar_teste(exemplo):
@@ -86,15 +68,6 @@ def collate_batch(batch):
     labels = torch.LongTensor(labels).flatten()
     return {'input_ids':input_ids, 'labels':labels, 'token_type_ids':types, 'attention_mask': masks}
 
-
-dataset = loaded_data.map(preparar_dataset)
-dataset = dataset.map(preparar2_dataset)
-dataset = dataset.map(preparar_teste)
-dataset2 = {}
-dataset2['train'] = DataLoader(dataset['train'], batch_size=batch_size,collate_fn=collate_batch, shuffle=True)
-dataset2['validation'] = DataLoader(dataset['validation'], batch_size=batch_size,collate_fn=collate_batch, shuffle=True)
-dataset2['test'] = DataLoader(dataset['test'], batch_size=batch_size,collate_fn=collate_batch, shuffle=True)
-
 def contar_discrepancias(vetor):
     contagem = 0
     for i in range(2):
@@ -108,10 +81,10 @@ def filtrar_dataset(dataset):
     dificil = []
     id_notas = {}
     for questao in dataset:
-        if questao['row_id'] not in id_notas:
-            id_notas[questao['row_id']]  = [questao['placeholder']*40]
+        if questao['id'] not in id_notas:
+            id_notas[questao['id']]  = [questao['placeholder']*40]
         else:
-            id_notas[questao['row_id']].append(questao['placeholder']*40)
+            id_notas[questao['id']].append(questao['placeholder']*40)
     #criei o dicionario com as notas
     print(id_notas)
     for chave in id_notas:
@@ -129,18 +102,13 @@ def filtrar_dataset(dataset):
     dataset_facil, dataset_medio, dataset_dificil = [], [], []
     print(f"Tamanhos dos splits: {len(facil)}, {len(dificil)}")
     for questao in dataset:
-        if questao['row_id'] in facil:
+        if questao['id'] in facil:
             dataset_facil.append(questao)
-        elif questao['row_id'] in dificil:
+        elif questao['id'] in dificil:
             dataset_dificil.append(questao)
         else:
             print("Erro na hora de quebrar o dataset")
     return {'facil': dataset_facil, 'dificil': dataset_dificil}
-            
-
-dataset_filtrado = filtrar_dataset(dataset['test']) 
-dataset2['facil'] = DataLoader(dataset_filtrado['facil'], batch_size=batch_size,collate_fn=collate_batch)
-dataset2['dificil'] = DataLoader(dataset_filtrado['dificil'], batch_size=batch_size,collate_fn=collate_batch)
 
 def discretizar(vetor):
     v = []
@@ -195,7 +163,7 @@ class TreinadorCustom(pl.LightningModule):
             num_training_steps=self.num_training_steps
         )
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
-
+    
 def get_predictions_and_labels(model, dataloader):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -215,9 +183,6 @@ def get_predictions_and_labels(model, dataloader):
 
     return all_predictions, all_true_labels
 
-from IPython.display import display
-from lightning.pytorch.callbacks import Callback
-
 class EpochEndCallback(Callback):
     def __init__(self):
         self.metrics_df = pd.DataFrame(columns=
@@ -234,11 +199,6 @@ class EpochEndCallback(Callback):
         # Metrics for training data
         train_dataloader = trainer.train_dataloader
         val_dataloader = trainer.val_dataloaders
-        
-        #epoch_train_loss_mean = torch.stack(pl_module.training_step_loss).mean()
-        #epoch_val_loss_mean = torch.stack(pl_module.validation_step_loss).mean()
-        #pl_module.training_step_loss.clear()
-        #pl_module.validation_step_loss.clear()
         global rede2
         model = rede2
         train_predictions, train_true_labels = get_predictions_and_labels(model, train_dataloader)
@@ -269,25 +229,47 @@ class EpochEndCallback(Callback):
         new_row = pd.Series(new_row).to_frame().T
         self.metrics_df = pd.concat([self.metrics_df, new_row])
         display(self.metrics_df)
+        
 
 
+
+RANDOM_SEED = 42
+pl.seed_everything(RANDOM_SEED)
+data_files = {"train": "samples_treinamento.csv", "test": "samples_teste.csv", "validation": "samples_validacao.csv"}
+loaded_data = load_dataset(path='./',data_files=data_files)
+batch_size = 1
+epochs = 2
+COMPETENCIA = 1
+modelo = "neuralmind/bert-base-portuguese-cased"
+tokenizer = AutoTokenizer.from_pretrained(modelo,model_max_length=512, truncation=True, do_lower_case=False)
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+disable_caching()
+dataset = loaded_data.map(preparar_dataset)
+dataset = dataset.map(preparar2_dataset)
+dataset = dataset.map(preparar_teste)
+dataset2 = {}
+dataset2['train'] = DataLoader(dataset['train'], batch_size=batch_size,collate_fn=collate_batch, shuffle=True)
+dataset2['validation'] = DataLoader(dataset['validation'], batch_size=batch_size,collate_fn=collate_batch, shuffle=True)
+dataset2['test'] = DataLoader(dataset['test'], batch_size=batch_size,collate_fn=collate_batch, shuffle=True)
+dataset_filtrado = filtrar_dataset(dataset['test']) 
+dataset2['facil'] = DataLoader(dataset_filtrado['facil'], batch_size=batch_size,collate_fn=collate_batch)
+dataset2['dificil'] = DataLoader(dataset_filtrado['dificil'], batch_size=batch_size,collate_fn=collate_batch)
 logger = CSVLogger("model_logs", name="enem_essay_score_classificadores")
 early_stop_callback = EarlyStopping(monitor="val_qwk", patience=3, verbose=True, mode="max")
 checkpoint_callback = ModelCheckpoint(save_top_k=1, monitor="val_qwk", mode="max")
 num_training_steps = epochs * len(dataset2['train'])
 warmup_steps = int(num_training_steps * 0.1)
-
 rede2 = TreinadorCustom(modelo, warmup_steps, num_training_steps)
 trainer = Trainer(max_epochs=epochs, callbacks=[EpochEndCallback(), early_stop_callback, checkpoint_callback ], logger=logger, accumulate_grad_batches=16 ) #limit_train_batches=100,
 trainer.fit(model=rede2, train_dataloaders=dataset2['train'], val_dataloaders=dataset2['validation'] )
-
 display(checkpoint_callback.best_model_path)
 display(checkpoint_callback.best_model_score)
-
 best_model = TreinadorCustom.load_from_checkpoint(checkpoint_callback.best_model_path)
-
+all_predictions, all_true_labels = get_predictions_and_labels(best_model, dataset2['validation'])
+compute_metrics(all_true_labels, all_predictions)
 tipos = ['test', 'facil', 'dificil']
 for t in tipos:
     all_predictions, all_true_labels = get_predictions_and_labels(best_model, dataset2[t])
     r = compute_metrics(all_true_labels, all_predictions)
     print(f"No {t}: ACC: {r['ACC']}, RMSE: {r['RMSE']}, QWK: {r['QWK']}, HDIV: {r['HDIV']} ") 
+    print(f"Latex entry: {r['ACC']:.2f} & {r['RMSE']:.2f} & {r['QWK']:.2f} & {r['HDIV']:.2f}")
