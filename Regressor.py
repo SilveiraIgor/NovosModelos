@@ -284,4 +284,4 @@ for t in tipos:
     all_predictions, all_true_labels = get_predictions_and_labels(best_model, dataset2[t])
     r = compute_metrics(all_true_labels, all_predictions)
     print(f"No {t}: ACC: {r['ACC']}, RMSE: {r['RMSE']}, QWK: {r['QWK']}, HDIV: {r['HDIV']} ")
-    print(f"Latex entry: {r['ACC']:.2f} & {r['RMSE']:.2f} & {r['QWK']:.2f} & {discrepancia_horizontal(notas_A, notas_B):.1f}")
+    print(f"Latex entry: {r['ACC']:.2f} & {r['RMSE']:.2f} & {r['QWK']:.2f} & {r['HDIV']:.2f}")
